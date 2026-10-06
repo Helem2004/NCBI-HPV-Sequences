@@ -1,0 +1,78 @@
+import subprocess
+import zipfile
+import json
+from pathlib import Path
+
+# Ruta de datasets.exe
+DATASETS = r"C:\Users\Helem\.conda\envs\python-starter\bin\datasets.exe"
+
+# Carpeta de salida
+CARPETA = Path("HPV16_Argentina")
+CARPETA.mkdir(exist_ok=True)
+
+ZIP_NCBI = CARPETA / "hpv16_Argentina.zip"
+CARPETA_EXTRAIDA = CARPETA / "ncbi_descarga"
+ARCHIVO_SALIDA = CARPETA / "accesiones_HPV16_Argentina.txt"
+
+print("Descargando registros de HPV-16 de Argentina desde NCBI Virus...")
+
+comando = [
+    DATASETS,
+    "download",
+    "virus",
+    "genome",
+    "taxon",
+    "Human papillomavirus type 16",
+    "--geo-location",
+    "Argentina",
+    "--include",
+    "none",
+    "--filename",
+    str(ZIP_NCBI),
+]
+
+subprocess.run(comando, check=True)
+
+print("Descarga completada.")
+
+# Descomprimir
+with zipfile.ZipFile(ZIP_NCBI, "r") as zip_ref:
+    zip_ref.extractall(CARPETA_EXTRAIDA)
+
+# Buscar el archivo de metadatos
+reportes = list(CARPETA_EXTRAIDA.rglob("data_report.jsonl"))
+
+if not reportes:
+    print("No se encontró data_report.jsonl")
+    exit()
+
+reporte = reportes[0]
+
+accesiones = []
+
+with open(reporte, "r", encoding="utf-8") as archivo:
+
+    for linea in archivo:
+
+        registro = json.loads(linea)
+
+        accession = registro.get("accession")
+
+        if accession:
+            accesiones.append(accession)
+
+# Eliminar duplicados
+accesiones = sorted(set(accesiones))
+
+# Guardar
+with open(ARCHIVO_SALIDA, "w", encoding="utf-8") as salida:
+
+    for accession in accesiones:
+        salida.write(accession + "\n")
+
+print()
+print("Proceso terminado.")
+print("Cantidad de accesiones encontradas:", len(accesiones))
+print()
+print("Archivo generado:")
+print(ARCHIVO_SALIDA.resolve())

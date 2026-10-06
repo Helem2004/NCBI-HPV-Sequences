@@ -1,0 +1,370 @@
+from urllib.request import urlopen
+from urllib.parse import urlencode
+from pathlib import Path
+import re
+import time
+
+
+# ============================================================
+# ARCHIVOS
+# ============================================================
+
+ARCHIVO_ACCESIONES = Path(
+    "Helem/HPV_58/HPV58_Brazil/accesiones_HPV58_Brazil.txt"
+)
+
+ARCHIVO_FASTA_E7 = Path(
+    "Helem/HPV_58/HPV58_Brazil/HPV58_Brazil_E7.fasta"
+)
+
+ARCHIVO_NO_ENCONTRADAS = Path(
+    "Helem/HPV_58/HPV58_Brazil/HPV58_Brazil_E7_no_encontradas.txt"
+)
+
+
+# ============================================================
+# LEER ACCESSIONS
+# ============================================================
+
+with open(
+    ARCHIVO_ACCESIONES,
+    "r",
+    encoding="utf-8"
+) as archivo:
+
+    accesiones = [
+        linea.strip()
+        for linea in archivo
+        if linea.strip()
+    ]
+
+
+print(
+    "Cantidad de accesiones:",
+    len(accesiones)
+)
+
+print()
+
+
+# ============================================================
+# DESCARGAR CDS DESDE NCBI
+# ============================================================
+
+def descargar_cds(accession):
+
+    parametros = {
+        "db": "nuccore",
+        "id": accession,
+        "rettype": "fasta_cds_na",
+        "retmode": "text"
+    }
+
+    url = (
+        "https://eutils.ncbi.nlm.nih.gov/"
+        "entrez/eutils/efetch.fcgi?"
+        + urlencode(parametros)
+    )
+
+    with urlopen(url) as respuesta:
+
+        return respuesta.read().decode("utf-8")
+
+
+# ============================================================
+# BUSCAR E7 DENTRO DE LOS CDS
+# ============================================================
+
+def buscar_E7_en_cds(cds_texto):
+
+    """
+    Recibe todos los CDS que devuelve NCBI
+    y busca aquellos cuyo encabezado contiene
+    información relacionada con E7.
+    """
+
+    # Separar cada registro FASTA
+    registros = re.split(
+        r"(?=^>)",
+        cds_texto,
+        flags=re.MULTILINE
+    )
+
+    resultados = []
+
+    for registro in registros:
+
+        registro = registro.strip()
+
+        if not registro:
+            continue
+
+        lineas = registro.splitlines()
+
+        encabezado = lineas[0]
+
+        secuencia = "".join(
+            lineas[1:]
+        ).replace(" ", "")
+
+        # ----------------------------------------------------
+        # Buscar E7 en el encabezado
+        # ----------------------------------------------------
+
+        encabezado_lower = encabezado.lower()
+
+        patrones_E7 = [
+            r"\be7\b",
+            r"e7 protein",
+            r"e7 early",
+            r"early protein e7",
+            r"protein e7"
+        ]
+
+        es_E7 = False
+
+        for patron in patrones_E7:
+
+            if re.search(
+                patron,
+                encabezado_lower
+            ):
+
+                es_E7 = True
+                break
+
+        # ----------------------------------------------------
+        # Guardar si corresponde a E7
+        # ----------------------------------------------------
+
+        if es_E7 and secuencia:
+
+            resultados.append(
+                (
+                    encabezado,
+                    secuencia
+                )
+            )
+
+    return resultados
+
+
+# ============================================================
+# PROCESAMIENTO
+# ============================================================
+
+contador_ok = 0
+contador_no_e7 = 0
+contador_error = 0
+contador_total = 0
+
+
+with open(
+    ARCHIVO_FASTA_E7,
+    "w",
+    encoding="utf-8"
+) as salida_fasta:
+
+    with open(
+        ARCHIVO_NO_ENCONTRADAS,
+        "w",
+        encoding="utf-8"
+    ) as salida_no_encontradas:
+
+        for numero, accession in enumerate(
+            accesiones,
+            start=1
+        ):
+
+            print(
+                f"[{numero}/{len(accesiones)}] "
+                f"Procesando {accession}..."
+            )
+
+            try:
+
+                # ------------------------------------------------
+                # Descargar todos los CDS del accession
+                # ------------------------------------------------
+
+                cds_texto = descargar_cds(
+                    accession
+                )
+
+                # ------------------------------------------------
+                # Buscar E7
+                # ------------------------------------------------
+
+                resultados_E7 = (
+                    buscar_E7_en_cds(
+                        cds_texto
+                    )
+                )
+
+                # ------------------------------------------------
+                # Si no encuentra E7
+                # ------------------------------------------------
+
+                if not resultados_E7:
+
+                    print(
+                        "   E7 no encontrado."
+                    )
+
+                    salida_no_encontradas.write(
+                        accession + "\n"
+                    )
+
+                    contador_no_e7 += 1
+
+                    time.sleep(0.4)
+
+                    continue
+
+                # ------------------------------------------------
+                # Guardar todos los E7 encontrados
+                # ------------------------------------------------
+
+                cantidad_E7 = len(
+                    resultados_E7
+                )
+
+                print(
+                    f"   E7 encontrados: "
+                    f"{cantidad_E7}"
+                )
+
+                for numero_E7, (
+                    encabezado,
+                    secuencia
+                ) in enumerate(
+                    resultados_E7,
+                    start=1
+                ):
+
+                    # ------------------------------------------------
+                    # Crear encabezado propio
+                    # ------------------------------------------------
+
+                    nuevo_encabezado = (
+                        f">{accession}_E7"
+                    )
+
+                    if cantidad_E7 > 1:
+
+                        nuevo_encabezado += (
+                            f"_{numero_E7}"
+                        )
+
+                    salida_fasta.write(
+                        nuevo_encabezado + "\n"
+                    )
+
+                    # ------------------------------------------------
+                    # Escribir secuencia
+                    # ------------------------------------------------
+
+                    for inicio in range(
+                        0,
+                        len(secuencia),
+                        80
+                    ):
+
+                        salida_fasta.write(
+                            secuencia[
+                                inicio:inicio + 80
+                            ] + "\n"
+                        )
+
+                    contador_total += 1
+
+                    print(
+                        f"      OK: "
+                        f"{len(secuencia)} nt"
+                    )
+
+                contador_ok += 1
+
+            except Exception as error:
+
+                print(
+                    f"   ERROR: {error}"
+                )
+
+                salida_no_encontradas.write(
+                    f"{accession}\tERROR: {error}\n"
+                )
+
+                contador_error += 1
+
+            # ----------------------------------------------------
+            # Esperar entre solicitudes
+            # ----------------------------------------------------
+
+            time.sleep(0.4)
+
+
+# ============================================================
+# RESUMEN FINAL
+# ============================================================
+
+print()
+
+print(
+    "============================================"
+)
+
+print(
+    "DESCARGA DE E7 FINALIZADA"
+)
+
+print(
+    "============================================"
+)
+
+print()
+
+print(
+    "Accesiones procesadas:",
+    len(accesiones)
+)
+
+print(
+    "Accesiones con E7:",
+    contador_ok
+)
+
+print(
+    "Accesiones sin E7:",
+    contador_no_e7
+)
+
+print(
+    "Errores:",
+    contador_error
+)
+
+print(
+    "Total de secuencias E7 descargadas:",
+    contador_total
+)
+
+print()
+
+print(
+    "FASTA E7:"
+)
+
+print(
+    ARCHIVO_FASTA_E7.resolve()
+)
+
+print()
+
+print(
+    "Accesiones no encontradas:"
+)
+
+print(
+    ARCHIVO_NO_ENCONTRADAS.resolve()
+)
